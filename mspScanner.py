@@ -4,7 +4,6 @@ import winreg
 import openpyxl
 from openpyxl.styles import Font
 import csv
-import gpo
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
@@ -64,25 +63,6 @@ def search_registry(root, search_terms, root_name):
     return results
 
 
-# Function to search Group Policy Objects (GPOs)
-def search_gpos(search_terms):
-    results = []
-    gpos_list = gpo.list_gpos()
-    for gpo_object in gpos_list:
-        gpo_path = f"GPO:\\{gpo_object.Name}"
-        for setting in gpo_object.Settings:
-            for term in search_terms:
-                if (
-                    term in setting.Path
-                    or term in setting.Name
-                    or term in setting.Value
-                ):
-                    results.append(
-                        (gpo_path, setting.Name, setting.Value, "GPO setting")
-                    )
-    return results
-
-
 # Function to initiate search
 def start_search():
     search_input = entry.get()
@@ -131,9 +111,6 @@ def start_search():
                     results.extend(future.result())
                 except Exception as e:
                     logging.error(f"Error occurred during registry search: {e}")
-
-    elif search_type == "GPO":
-        results.extend(search_gpos(search_terms))
 
     display_results(results)
     global current_results
@@ -301,8 +278,8 @@ frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
 ttk.Label(frame, text="Search Type:").grid(row=0, column=0, sticky=tk.W)
 search_type_var = tk.StringVar()
 search_type_combobox = ttk.Combobox(
-    frame, textvariable=search_type_var, values=["Registry", "GPO"], state="readonly"
-)
+    frame, textvariable=search_type_var, values=["Registry"], state="readonly"
+)  # Removed "GPO"
 search_type_combobox.grid(row=0, column=1, sticky=(tk.W, tk.E))
 search_type_combobox.current(0)
 
