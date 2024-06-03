@@ -8,6 +8,7 @@ import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import os
+import threading
 import time
 from datetime import datetime, timedelta
 
@@ -76,58 +77,91 @@ def start_search():
     scan_scope = scan_scope_var.get()
     results = []
 
-    if search_type == "Registry":
-        if scan_scope == "whole_device":
-            root_keys = [
-                winreg.HKEY_LOCAL_MACHINE,
-                winreg.HKEY_CURRENT_USER,
-                winreg.HKEY_CLASSES_ROOT,
-                winreg.HKEY_USERS,
-                winreg.HKEY_CURRENT_CONFIG,
-            ]
-        else:
-            root_keys = [winreg.HKEY_CURRENT_USER]
+    def search():
+        try:
+            if search_type == "Registry":
+                if scan_scope == "whole_device":
+                    root_keys = [
+                        winreg.HKEY_LOCAL_MACHINE,
+                        winreg.HKEY_CURRENT_USER,
+                        winreg.HKEY_CLASSES_ROOT,
+                        winreg.HKEY_USERS,
+                        winreg.HKEY_CURRENT_CONFIG,
+                    ]
+                else:
+                    root_keys = [winreg.HKEY_CURRENT_USER]
 
-        root_names = {
-            winreg.HKEY_LOCAL_MACHINE: "HKLM",
-            winreg.HKEY_CURRENT_USER: "HKCU",
-            winreg.HKEY_CLASSES_ROOT: "HKCR",
-            winreg.HKEY_USERS: "HKU",
-            winreg.HKEY_CURRENT_CONFIG: "HKCC",
-        }
+                root_names = {
+                    winreg.HKEY_LOCAL_MACHINE: "HKLM",
+                    winreg.HKEY_CURRENT_USER: "HKCU",
+                    winreg.HKEY_CLASSES_ROOT: "HKCR",
+                    winreg.HKEY_USERS: "HKU",
+                    winreg.HKEY_CURRENT_CONFIG: "HKCC",
+                }
 
-        with ThreadPoolExecutor(max_workers=5) as executor:
-            future_to_root = {
-                executor.submit(
-                    search_registry,
-                    winreg.OpenKey(root_key, ""),
-                    search_terms,
-                    root_names[root_key],
-                ): root_key
-                for root_key in root_keys
-            }
-            for future in as_completed(future_to_root):
-                try:
-                    results.extend(future.result())
-                except Exception as e:
-                    logging.error(f"Error occurred during registry search: {e}")
+                with ThreadPoolExecutor(max_workers=5) as executor:
+                    future_to_root = {
+                        executor.submit(
+                            search_registry,
+                            winreg.OpenKey(root_key, ""),
+                            search_terms,
+                            root_names[root_key],
+                        ): root_key
+                        for root_key in root_keys
+                    }
+                    for future in as_completed(future_to_root):
+                        try:
+                            results.extend(future.result())
+                        except Exception as e:
+                            logging.error(f"Error occurred during registry search: {e}")
 
-    display_results(results)
-    global current_results
-    current_results = results
-    log_search(search_type, search_input, results)
-    search_button.config(state=tk.NORMAL)
+            display_results(results)
+            global current_results
+            current_results = results
+            log_search(search_type, search_input, results)
+        except Exception as e:
+            logging.error(f"Search failed: {e}")
+            messagebox.showerror(
+                "Search Error", f"An error occurred during the search: {e}"
+            )
+        finally:
+            search_button.config(state=tk.NORMAL)
+            stop_animation.set()
+
+    threading.Thread(target=search).start()
+    threading.Thread(target=animate_search).start()
 
 
 # Function to display results in the GUI
 def display_results(results):
     results_text.config(state=tk.NORMAL)
     results_text.delete(1.0, tk.END)
-    for result in results:
-        results_text.insert(
-            tk.END,
-            f"Path: {result[0]}\nEntry: {result[1]}\nValue: {result[2]}\nDescription: {result[3]}\n\n",
-        )
+
+    if not results:
+        results_text.insert(tk.END, "No matching registry keys or values found.")
+    else:
+        for result in results:
+            path, entry, value, description = result
+            if isinstance(value, bytes):
+                try:
+                    value = value.decode("utf-8")
+                except UnicodeDecodeError:
+                    value = f"Binary data: {value}"
+            elif (
+                isinstance(value, str) and value.startswith("[") and value.endswith("]")
+            ):
+                try:
+                    value = json.loads(value)
+                    value = json.dumps(value, indent=4)
+                except json.JSONDecodeError:
+                    pass  # leave value as is if it can't be parsed as JSON
+
+            results_text.insert(tk.END, f"Path: {path}\n")
+            results_text.insert(tk.END, f"Entry: {entry}\n")
+            results_text.insert(tk.END, f"Value: {value}\n")
+            results_text.insert(tk.END, f"Description: {description}\n")
+            results_text.insert(tk.END, "\n" + "=" * 80 + "\n\n")
+
     results_text.config(state=tk.DISABLED)
     export_button.config(state=tk.NORMAL)
 
@@ -269,6 +303,17 @@ def view_previous_searches():
         messagebox.showinfo("Previous Searches", "No previous searches found.")
 
 
+# Function to animate the search
+def animate_search():
+    animation = ["|", "/", "-", "\\"]
+    idx = 0
+    while not stop_animation.is_set():
+        status_label.config(text=f"Searching... {animation[idx]}")
+        idx = (idx + 1) % len(animation)
+        time.sleep(0.1)
+    status_label.config(text="Search Complete")
+
+
 # Set up the main GUI window
 root = tk.Tk()
 root.title("Enhanced Scanner")
@@ -279,7 +324,7 @@ ttk.Label(frame, text="Search Type:").grid(row=0, column=0, sticky=tk.W)
 search_type_var = tk.StringVar()
 search_type_combobox = ttk.Combobox(
     frame, textvariable=search_type_var, values=["Registry"], state="readonly"
-)  # Removed "GPO"
+)
 search_type_combobox.grid(row=0, column=1, sticky=(tk.W, tk.E))
 search_type_combobox.current(0)
 
@@ -333,6 +378,13 @@ export_button = ttk.Button(
     frame, text="Export Results", command=export_results, state=tk.DISABLED
 )
 export_button.grid(row=4, column=5, sticky=tk.E)
+
+# Status label for animation
+status_label = ttk.Label(frame, text="")
+status_label.grid(row=4, column=0, columnspan=4, sticky=tk.W)
+
+# Event to stop the animation
+stop_animation = threading.Event()
 
 root.columnconfigure(0, weight=1)
 root.rowconfigure(0, weight=1)
